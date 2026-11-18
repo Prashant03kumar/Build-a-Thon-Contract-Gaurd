@@ -1,0 +1,36 @@
+# Contract Guard — runtime: API/UI container + the kit's webhook receiver.
+# Kit files stay untouched: this compose only references ../webhook-receiver
+# and mounts ../specs and ../consumers read-only (for the M1 import).
+# Run:  cd app && docker compose up --build
+
+name: contract-guard
+
+services:
+  webhook-receiver:
+    build:
+      context: ../webhook-receiver
+    environment:
+      PORT: "9000"
+    ports:
+      - "${WEBHOOK_PORT:-9900}:9000"
+
+  guard:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      PORT: "3001"
+      WEBHOOK_BASE: http://webhook-receiver:9000
+      DATABASE_URL: file:/data/guard.db
+      KIT_DATA_DIR: /kit
+    ports:
+      - "3001:3001"
+    volumes:
+      - guard-data:/data
+      - ../specs:/kit/specs:ro
+      - ../consumers:/kit/consumers:ro
+    depends_on:
+      - webhook-receiver
+
+volumes:
+  guard-data:
