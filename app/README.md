@@ -1,229 +1,119 @@
-# Contract Guard — application
+# Contract Guard
 
-This folder contains everything we build. The starter kit (`../specs`, `../consumers`,
-`../webhook-receiver`, `../docker-compose.yml`, `../README.md`) is **never modified** —
-see `../PLAN.md` for the full plan.
+Contract Guard helps teams understand the effect of API changes before a release. It imports OpenAPI specifications and consumer manifests, compares published versions, identifies affected consumers, checks a publishing gate, and sends breaking-change notifications to a webhook receiver.
 
-## Runtime topology
+The dashboard and API use real data stored in SQLite. The original starter kit remains outside this application directory and is mounted read-only for import.
 
-```
-Browser ──► Guard (Express API + built React UI) :3001
-                 │
-                 ├─ SQLite ✓ M1a (Docker: file:/data/guard.db · local: server/prisma/dev.db)
-                 └─ webhook POSTs ──► webhook-receiver :9000 (host :9900)
-```
+## Quick start
 
-| URL | What |
-| --- | --- |
-| http://localhost:3001 | Guard UI + API (Docker mode) |
-| http://localhost:3001/api/health | Health JSON (API liveness + receiver reachability) |
-| http://localhost:5173 | Web dev server (local dev mode) |
-| http://localhost:9900 | Webhook receiver (live page / `GET /api/received`) |
+**Requirements:** Docker Desktop (or Docker Engine) with Docker Compose, and free ports `3001` and `9900`.
 
-## Option A — run everything with Docker (recommended)
+From the repository root:
 
-```powershell
+```sh
 cd app
-docker compose up --build
+docker compose up -d --build
 ```
 
-- UI + API: http://localhost:3001 (one image: multi-stage build compiles web, then Express serves it)
-- Receiver: http://localhost:9900
-- Stop: `Ctrl+C`, then `docker compose down`
+Wait for startup and database migrations, then open:
 
-Port conflict on 9900? `WEBHOOK_PORT=9950 docker compose up --build`
+| Address | Purpose |
+| --- | --- |
+| [localhost:3001](http://localhost:3001) | Dashboard and API |
+| [localhost:3001/api/health](http://localhost:3001/api/health) | Database and receiver health |
+| [localhost:9900](http://localhost:9900) | Webhook receiver inbox |
 
-## Option B — local development (hot reload)
+Stop the application with `docker compose down` from `app/`. The SQLite volume is retained, so imported data and findings survive a restart. The starter-kit receiver keeps its inbox in memory, so its messages do not survive a receiver restart.
 
-```powershell
-# Terminal 1 — webhook receiver (either of these):
-cd app ; docker compose up --build webhook-receiver
-#   or, without Docker (receiver is plain Python stdlib):
-#   $env:PORT="9900" ; python ..\webhook-receiver\app.py
+> **Data safety:** `docker compose down -v` also deletes the `guard-data` volume and its database. Use it only when you intentionally want to discard the application's stored data.
 
-# Terminal 2 — API on :3001
-cd app\server
+## Demonstration
+
+1. Open the dashboard and receiver in separate tabs. On an empty database, select **Import kit**. The kit contains 3 providers, 12 specification versions, 4 consumers and 10 consumer usages. Import records a spec error for a dangling reference and a warning for a republished version.
+2. Select **Run analyze**. This compares valid versions, calculates consumer impacts, and attempts to deliver pending breaking-change notifications. A fresh kit analysis produces 11 BREAKING and 9 INFO findings, in addition to the 2 import findings.
+3. Explore the findings and affected consumers. For example, `mobile-app` reads the renamed quote field and `partner-portal` is affected by policy request changes. The internal quote cache change is not attributed to an external consumer.
+4. Inspect the gate cards and version list. After analysis, the latest claims and policy versions are BLOCKED; the latest quote version is ALLOWED. Quote 2.0.0 is BLOCKED, while its cosmetic 1.0.0 → 1.1.0 reorganization produces no comparison findings.
+5. Open the receiver to see the breaking-change events. **Clear receiver** clears its inbox; **Resend notifications** intentionally sends all breaking findings again. Ordinary retries only send pending notifications.
+
+Run analysis after importing or changing data before relying on gate results: the gate uses the findings and impacts already stored in the database. On an existing database, a repeat analysis may report zero *new* findings and zero notifications attempted because existing records and delivery status are retained.
+
+## How it works
+
+1. **Import:** the importer discovers provider YAML files and consumer manifests. Swagger Parser validates and dereferences the specifications. Invalid specifications remain stored and are reported as findings.
+2. **Compare:** versions are ordered by `publishOrder`; invalid versions are skipped and comparison bridges to the next valid version. The engine compares normalized operations and request/response schemas.
+3. **Assess impact:** findings are matched to consumer operations and their declared fields. Internal operations are excluded from consumer attribution.
+4. **Gate and notify:** the gate blocks a version when a BREAKING finding affects a registered consumer. Analysis attempts a webhook POST for each pending BREAKING finding; successful deliveries are recorded.
+
+The dashboard shows these results; it does not itself publish an API. See [DESIGN.md](DESIGN.md) for architecture and limitations, [PLAN.md](PLAN.md) for scope, and [PROGRESS.md](PROGRESS.md) for recorded verification.
+
+## API reference
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /api/health` | API, database and receiver status |
+| `POST /api/kit/import` | Import starter-kit specs and consumer manifests |
+| `POST /api/providers/:name/specs` | Upload a spec as JSON: `{ "fileName": "1-initial.yaml", "content": "<YAML>" }` |
+| `POST /api/consumers` | Upload a manifest as JSON: `{ "content": "<YAML>" }` |
+| `GET /api/providers` | List providers and ordered versions |
+| `GET /api/consumers` | List consumers and declared usages |
+| `GET /api/findings` | List findings, including delivery flags |
+| `GET /api/impacts` | List findings with affected consumers |
+| `POST /api/analyze` | Compare versions, update impacts and attempt pending notifications |
+| `POST /api/gate-check` | Check `{ "provider": "quote-api", "publishOrder": 3 }` |
+| `POST /api/publish/check` | Alias for the gate check |
+| `POST /api/notifications/retry` | Retry pending deliveries; `{ "resendAll": true }` deliberately sends all BREAKING findings |
+| `POST /api/notifications/clear-receiver` | Clear the configured receiver's inbox; does not reset database delivery flags |
+
+Use `publishOrder` for gate requests when version strings are repeated: claims-api publishes `1.1.0` twice. A version-only request for an ambiguous version is rejected.
+
+## Local development and tests
+
+Requires Node.js 20 or later and npm. The following commands assume terminals start at the repository root. For local webhook delivery, run the receiver separately (for example, from `app/`: `docker compose up -d webhook-receiver`). Ensure `app/server/.env` exists with the following setting; if you already have one, preserve your existing configuration:
+
+```dotenv
+DATABASE_URL="file:./dev.db"
+```
+
+```sh
+cd app/server
 npm install
-npm run db:migrate   # first time only — dev.db is provided, safe to re-run
-npm run dev          # tsx watch — auto-restarts on file changes
+npm run db:generate
+npm run db:deploy
+npm run dev
+```
 
-# Terminal 3 — web on :5173 (proxies /api to :3001)
-cd app\web
+In another terminal:
+
+```sh
+cd app/web
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173. `WEBHOOK_BASE` defaults to `http://localhost:9900`.
+Open [localhost:5173](http://localhost:5173). The Vite development server proxies `/api` to port `3001`. The local API defaults to `WEBHOOK_BASE=http://localhost:9900`. The example `.env` uses `app/server/prisma/dev.db`; Prisma client generation is required before a fresh TypeScript build. If the Docker API is already running on port 3001, stop it before starting the local API.
 
-## Health check
+To check the server and web builds:
 
-```powershell
-curl http://localhost:3001/api/health
+```sh
+cd app/server
+npm run typecheck
+npm run build
+npm run test
+npm run test:m3
+npm run test:m4
 ```
 
-```json
-{
-  "status": "ok",              // "degraded" = DB and/or receiver unusable
-  "service": "contract-guard-api",
-  "uptimeSeconds": 12,
-  "timestamp": "2026-11-18T…",
-  "database": {
-    "reachable": true,
-    "tables": { "providers": 0, "specVersions": 0, "consumers": 0, "consumerUses": 0, "findings": 0 },
-    "error": null
-  },
-  "webhookReceiver": { "url": "…", "reachable": true, "latencyMs": 4, "error": null }
-}
+```sh
+cd app/web
+npm run typecheck
+npm run build
 ```
 
-Other API: any unknown `/api/*` path returns `404 {"error":"not found"}`.
+**Test data warning:** the M3 and M4 tests use the configured database, import or create records, run analysis, and may attempt webhook delivery. Use an isolated test database and receiver when you need to preserve existing data. The intentional HTTP 503 in the M4 test exercises its failure path.
 
-## API endpoints (implemented so far)
+## Known limitations
 
-| Method & path | Status | Purpose |
-| --- | --- | --- |
-| `GET /api/health` | ✅ | Liveness of API + SQLite + webhook receiver (with per-table row counts) |
-| `POST /api/kit/import` | ✅ | Import all specs + consumer manifests from the kit folders (idempotent) |
-| `POST /api/providers/:name/specs` | ✅ | Upload one spec: `{ "fileName": "1-initial.yaml", "content": "<yaml text>" }` |
-| `POST /api/consumers` | ✅ | Upload one consumer manifest: `{ "content": "<yaml text>" }` |
-| `GET /api/providers` | ✅ | Providers + ordered versions + validity flags |
-| `GET /api/consumers` | ✅ | Consumers + usages (sends/reads as arrays) |
-| `GET /api/findings` | ✅ | All findings (raw rows incl. the `notified` flag) |
-| `POST /api/analyze` | ✅ M2–M4 | Diff + impact join + webhook delivery in one run (idempotent — re-runs reconcile, never duplicate) |
-| `GET /api/impacts` | ✅ M3 | Findings with their affected consumers |
-| `POST /api/gate-check` | ✅ M3 | Publish gate verdict: `{provider, publishOrder \| version}` → ALLOWED/BLOCKED + who breaks |
-| `POST /api/notifications/retry` | ✅ M4 | Re-deliver pending BREAKING notifications; body `{ "resendAll": true }` re-delivers all of them (demo reset) |
-| `POST /api/notifications/clear-receiver` | ✅ M6 | Wipe the kit receiver's inbox so repeated demos start clean |
-
-## The dashboard (M5)
-
-One page at http://localhost:3001 (or the Vite dev server), built from real API data only:
-
-| Section | Source endpoint | Shows |
-| --- | --- | --- |
-| Overview cards | providers / consumers / impacts | providers · spec versions · consumers · breaking-change count |
-| Publishing gate | `POST /api/gate-check` per version | ALLOWED / BLOCKED / INVALID-SPEC per publish slot; latest-version verdict per provider with affected consumers |
-| Providers & versions | providers | publishOrder timeline, file names, validity, gate badge, findings count |
-| Findings | `GET /api/impacts` + `GET /api/findings` (merged by id) | severity chip, version pair, rule, field path, message, affected consumers, delivery dot |
-| Consumers | consumers + impacts | team, call count, providers used, "affected by N findings" |
-| Webhook status | findings' `notified` flags + health | delivered vs pending (BREAKING), receiver reachability, retry button, link to the live receiver page |
-
-Action buttons run the real pipeline: **Import kit** → **Run analyze** (diff + impacts + notifications) → **Resend notifications** → **Clear receiver**. No mock data anywhere; see `DESIGN.md` for the design system and `PROGRESS.md` for milestone status.
-
-## 5-minute demo script
-
-Everything below happens on two browser tabs + the dashboard buttons (numbers are
-the real values this kit produces):
-
-1. **Start fresh** (optional): `cd app; docker compose down -v; docker compose up -d --build`
-   — an empty database; open http://localhost:3001 and http://localhost:9900.
-2. **Import kit** → overview cards fill: 3 providers · 12 spec versions · 4 consumers ·
-   2 lint findings (the dangling `ClaimDocumnt` $ref SPEC_ERROR + the 1.1.0 republish WARN).
-3. **Run analyze** → 20 findings appear (11 BREAKING incl. B1–B6, 9 INFO), consumer
-   chips land on the affected findings, gate badges turn ALLOWED/BLOCKED, and the
-   receiver tab pops 11 `contract.breaking_change` events (live refresh).
-4. **Show the gate story**: claims v2.0.0 → BLOCKED [mobile-app] (reads `amountApproved`,
-   demoted from required) · policy v2.1.0 → BLOCKED [partner-portal] (must now send
-   `requestedBy`, `type` no longer accepts VEHICLE) · quote v2.1.0 → ALLOWED.
-   On the quote timeline, v1→v2 (cosmetic reorg) shows zero findings — no false positives.
-5. **Resend / clear**: **Clear receiver** empties the inbox, **Resend notifications**
-   re-delivers all 11 — proves retry works and nothing is lost. Default retry mode
-   (pending only) never double-posts.
-6. **Restart-proof**: `docker compose down` (keep volume) → `up -d` → data intact
-   (12 versions, 22 findings).
-
-## How the kit import works (M1b)
-
-1. **Discover** — each subfolder of `specs/` becomes a provider (upsert by name); `*.yaml`
-   files inside are ordered by their numeric prefix (`3-price-lines.yaml` → publishOrder 3).
-2. **Validate** — every file: YAML parse → `SwaggerParser.validate()` (OpenAPI 3.0.3 schema
-   + `$ref` resolution) → `dereference()` (all `$ref`s inlined). Results stored per row:
-   `version` (`info.version`), `valid`, `raw` (audit trail), `canonical` (resolved JSON).
-3. **Lint** — two checks, findings replaced (never duplicated) per import:
-   - `spec-ref-unresolvable` (SPEC_ERROR): file that fails validation — e.g. the kit's
-     dangling `ClaimDocumnt` ref in claims-api file 2.
-   - `version-republished` (WARN): same `info.version` at two publish slots — e.g. claims
-     `1.1.0` published twice (broken, then corrected).
-4. **Store** — `SpecVersion` upserts by `(providerId, fileName)`; stale rows whose file
-   vanished are removed; `unique(providerId, publishOrder)` makes duplicate slots impossible.
-5. **Consumers** — manifests parsed into `Consumer` + `ConsumerUse` rows (`sends`/`reads`
-   as JSON strings; `pathNorm` normalizes `{id}`/`{quoteId}` to `{param}`); usages are
-   replaced wholesale each import.
-
-Import is **safe to run repeatedly**: same input → same database state, same findings.
-
-## How version comparison works (M2)
-
-`POST /api/analyze` runs the diff engine over what M1 stored:
-
-1. **Normalize** — each version's stored `canonical` (already $ref-free) becomes an
-   operation map keyed by `METHOD|<path with {param}>`, keeping `x-internal`,
-   parameters, request schema and per-status response schemas. Path-param renames
-   (`{id}` → `{quoteId}`) normalize away, so cosmetic reorgs never diff.
-2. **Bridge invalid specs** — only versions that validated become diff endpoints;
-   a broken version is jumped over (claims-api diffs run 1→3 and 3→4).
-3. **Rule engine** — direction-aware rules per operation:
-   - BREAKING: response field removed / renamed, required demoted; request field
-     now required, enum narrowed; new required parameter (tagged `x-internal` in
-     the message when internal — no consumer blame later).
-   - INFO: optional fields added, enums widened, new response status, new operation.
-4. **Store** — findings land in the `Finding` table (`consumer: null` until the M3
-   impact join). Engine rules are deleted-and-recomputed per run, so repeated
-   analyses never duplicate; import-lint findings are untouched.
-
-Engine tests (`npm run test`, in `server`) assert all kit breakages B1–B6 are
-detected and quote-api's cosmetic v1→v2 reorg yields zero findings.
-
-On the starter kit the engine produces **20 findings per run**: 11 BREAKING
-(B1–B6 — some surface once per operation because shared schemas like `Quote` are
-returned by two endpoints) + 9 INFO. Together with the 2 import-lint findings the
-`Finding` table holds 22 rows.
-
-## Database (Prisma + SQLite) — done (M1a schema + M1b import)
-
-Five tables (design rationale is commented inline in `server/prisma/schema.prisma`):
-
-| Table | Purpose |
-| --- | --- |
-| `Provider` | one row per API provider (`quote-api`, `policy-api`, `claims-api`) |
-| `SpecVersion` | one row per published spec; lineage = `(providerId, publishOrder)` |
-| `Consumer` | one row per consuming service |
-| `ConsumerUse` | one row per API call a consumer makes (`sends`/`reads` stored as JSON strings) |
-| `Finding` | one row per detected issue (`notified` = webhook delivery flag) |
-
-**Anti-duplicate guarantee:** `@@unique([providerId, publishOrder])` — a provider can
-never hold two versions in the same publish slot. The version *string* itself may
-repeat (claims-api republished 1.1.0 with a corrected `$ref`) — that is by design;
-import linting (M1b) flags it as a WARN.
-
-| Command (run in `app/server`) | What it does |
-| --- | --- |
-| `npm run db:migrate` | create/apply migrations in dev (`prisma/dev.db`) + regenerate client |
-| `npm run db:deploy` | apply migrations non-interactively (what Docker runs at startup) |
-| `npm run db:generate` | regenerate the Prisma client after schema edits |
-| `npm run db:studio` | browse the data in Prisma Studio |
-| `npm run db:smoke` | schema smoke test (constraints, cascades, cleanup) |
-
-- **Docker:** migrations run automatically at container start against `file:/data/guard.db`,
-  persisted in the `guard-data` volume across restarts.
-- **Local dev:** `server/prisma/dev.db` (git-ignored, already created).
-
-## What's in here
-
-| Path | Purpose |
-| --- | --- |
-| `compose.yaml` | Our runtime: `guard` + kit's `webhook-receiver` (kit compose untouched) |
-| `.dockerignore` / `.gitignore` | Keep images/repos clean |
-| `server/` | Express + TypeScript API, Prisma/SQLite (`prisma/schema.prisma`, migrations, `smoke.ts`), multi-stage `Dockerfile` |
-| `web/` | React + Vite + TypeScript + Tailwind v4 dashboard (`src/App.tsx`, `src/components/ui.tsx`, `src/api/client.ts`) |
-
-## Notes
-
-- **All milestones done**: M0 scaffold · M1 database + import + lint · M2 diff engine ·
-  M3 impact + gate · M4 webhook notifications · M5 dashboard · M6 hardening & demo
-  polish (fresh-database workflow verified end-to-end, compose restart persistence,
-  demo reset controls).
-- Tests: `npm run test` (engine, 29 checks), `npm run test:m3` (impact/gate),
-  `npm run test:m4` (notifications: delivery, failure, retry, no double-post) — all in `app/server`.
-- If this project lives inside OneDrive, consider excluding `node_modules` from sync for speed.
-- Docs: design system in `DESIGN.md`, milestone log in `PROGRESS.md`.
+- Findings and gate queries identify target versions by version string, so repeated version strings can cause findings to appear against both publish slots even when a gate request uses `publishOrder`.
+- The comparison engine handles the implemented rule set, not every possible OpenAPI compatibility change. Sunset and early-removal rules are not implemented.
+- Only BREAKING findings are delivered as webhooks. A successful delivery flag records an HTTP success, not long-term receiver retention. Explicit resend-all may create duplicate receiver events.
+- The receiver URL in Docker health data is an internal container address; open [localhost:9900](http://localhost:9900) directly from your browser if the dashboard link does not work.

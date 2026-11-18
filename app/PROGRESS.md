@@ -1,54 +1,44 @@
-# Contract Guard — Progress Log
+# Contract Guard — Progress and Verification
 
-| Milestone | Scope | Status | Proof |
-| --- | --- | --- | --- |
-| M0 | Scaffold: Express API + React/Vite web + 2-container compose + health endpoint | ✅ Done | health JSON live; UI served same-origin |
-| M1a | Prisma + SQLite: 5 tables, migrations, anti-duplicate lineage key, DB-aware health | ✅ Done | `db:smoke` 6/6; unique-slot P2002 proof |
-| M1b | Import: 12 specs + 4 consumer manifests, Swagger Parser validation + `$ref` dereference, lint (dangling ref SPEC_ERROR, republish WARN), idempotent re-imports | ✅ Done | 3/12/4/10 rows + 2 lint findings; run-twice identical |
-| M2 | Diff engine: normalize → bridge invalid specs → direction-aware rules; `POST /api/analyze` | ✅ Done | `npm run test` 29/29; B1–B6 detected; quote 1→2 zero false positives |
-| M3 | Consumer impact join + `FindingConsumer` model + `GET /api/impacts` + `POST /api/gate-check` (ALLOWED/BLOCKED + who breaks) | ✅ Done | `npm run test:m3` passed; B6 never attributed; notifications-svc untouched |
-| M4 | Webhook delivery: BREAKING findings POSTed to the kit receiver, `notified` flag, retry endpoint, duplicate prevention, failure tolerance | ✅ Done | `npm run test:m4` passed; 11/11 delivered live; receiver holds 11 events |
-| M5 | Dashboard: overview cards, provider/version timeline with gate badges, findings with affected consumers + delivery status, consumer cards, webhook panel, action buttons — all real data | ✅ Done | web typecheck + build clean; live data verified (see below) |
-| M6 | Hardening & demo polish: fresh-DB end-to-end workflow, compose shutdown/restart persistence, gate-badge semantics fix, demo reset (clear receiver + resend-all), README demo script | ✅ Done | 14-step fresh-workflow PASS (see below) |
+## Current status
 
-## M5 verification (actual results, 2026-11-18)
+The application implements the M0–M6 demo workflow: import, validation, comparison, impact mapping, advisory gate, webhook delivery and dashboard. See [PLAN.md](PLAN.md) for the acceptance targets and [DESIGN.md](DESIGN.md) for implementation details and boundaries.
 
-- `npm run typecheck` (web): **pass** — zero errors.
-- `npm run build` (web): **pass** — 29 modules, Tailwind CSS 14.89 kB, JS 157.89 kB.
-- Backend suites re-run after wiring: engine **29/29 PASS**, M3 **PASS** (22 findings / 5 impacts), M4 **PASS** (delivery, failure, retry, no duplicates).
-- Live container: overview shows providers 3 · versions 12 · consumers 4 · breaking 11;
-  gates — claims v2.0.0 **BLOCKED [mobile-app]**, policy v2.1.0 **BLOCKED [partner-portal]**,
-  quote v2.1.0 **ALLOWED**; notifications **11 delivered / 0 failed**;
-  webhook receiver holds 11 `contract.breaking_change` events.
+| Milestone | Implemented scope |
+| --- | --- |
+| M0 | API and UI scaffold, Compose and health endpoint |
+| M1 | SQLite registry, starter-kit import, validation and import findings |
+| M2 | Version comparison, targeted rules and invalid-version bridging |
+| M3 | Consumer attribution and publish gate |
+| M4 | Webhook delivery and pending retry |
+| M5 | Responsive, API-backed dashboard |
+| M6 | Demo workflow checks, lifecycle checks and documentation |
 
-## M6 verification (actual results, 2026-11-18)
+## Recorded verification
 
-- **Builds:** server `tsc` ✅ · web `tsc --noEmit` + `vite build` ✅ (29 modules).
-- **Tests:** engine **29/29 PASS** · M3 **PASS** (22 findings / 5 impacts, idempotent
-  re-analysis) · M4 **PASS** (delivery, 503-failure tolerance, retry, no double-post).
-- **Fresh-database workflow** (after `docker compose down -v` → `up -d --build`,
-  exactly what an evaluator sees): 14/14 PASS —
-  empty-tables health → import (3/12/4/10 + 2 lint) → analyze (20 findings, 5 impacts,
-  11/11 notifications) → re-analyze (0 new, no duplicates, no re-delivery) → impacts
-  attributed (mobile-app, payments-svc, partner-portal; B6 stays provider-level) →
-  gates (claims BLOCKED [mobile-app], policy BLOCKED [partner-portal], quote ALLOWED)
-  → receiver holds 11 events → clear → resend-all 11/11 → default retry posts nothing
-  (no double-post).
-- **Compose lifecycle:** `down -v` clean shutdown; `up -d` runs migrations on the
-  empty volume; `down` + `up -d` without `-v` preserves data (12 versions / 22
-  findings intact after restart).
-- **Fixes during M6:**
-  1. Gate badge semantics — a failed/not-yet-loaded gate check no longer shows
-     "INVALID SPEC"; it shows "…" (verdict unknown). Only truly invalid specs
-     show INVALID SPEC.
-  2. Demo reset — new `POST /api/notifications/clear-receiver` (empties the kit
-     receiver) and `resendAll` mode on `/api/notifications/retry` (re-delivers every
-     BREAKING finding). Default pending-only retry semantics unchanged (M4 tests pass).
+The following results were observed during the previous M5/M6 verification on 2026-11-18. They are historical results, not a claim that tests were rerun for this documentation update.
 
-## Known honest limitations (say these in evaluation)
+| Check | Recorded result |
+| --- | --- |
+| Backend TypeScript typecheck and build | Passed after generating the Prisma client |
+| Frontend TypeScript typecheck and production build | Passed |
+| Engine suite | Passed; kit B1–B6 detected and quote cosmetic reorganization produced zero findings |
+| M3 suite | Passed; 22 findings and 5 consumer-impact links in the observed kit database |
+| M4 suite | Passed; delivery, expected HTTP 503 failure path, retry and duplicate prevention exercised |
+| Compose lifecycle | Startup and shutdown worked; a normal restart preserved 12 versions and 22 findings |
 
-- Gate per version uses findings keyed by version *string*; the republished claims
-  `1.1.0` slot shows its findings on both rows (count by `toVersion`).
-- Only BREAKING findings trigger webhook delivery (INFO stays `notified=false` by design).
-- Sunset/`x-sunset` rules (D1/D2) are planned but not yet implemented (post-build stretch).
-- Dashboard is one page; deep-dive screens (per-pair diff detail) are stretch.
+### Fresh-database workflow observations
+
+The recorded Docker workflow started with empty tables. Import returned 3 providers, 12 versions, 4 consumers, 10 usages and 2 import findings. Analysis created 20 comparison findings, recorded 5 impacts and delivered 11 notifications. Re-analysis created no new findings and attempted no repeat deliveries. The latest claims and policy gates were BLOCKED and the latest quote gate was ALLOWED. The internal quote change had no external consumer attribution.
+
+The initial workflow script **failed** its expectation that ordinary retry would resend notifications after clearing the receiver. A separate check using the explicit `resendAll` option subsequently delivered 11 events; an ordinary retry then attempted zero. The original workflow was not recorded as a clean 14/14 pass, and the temporary workflow script is not a committed automated test.
+
+## Known limitations
+
+- Findings and gate checks use version strings for target matching; a republished version string can conflate results across publish slots.
+- Sunset and early-removal deadline rules from the original plan are not implemented. The comparison engine covers selected rules, not all OpenAPI compatibility changes.
+- Only BREAKING findings trigger webhook delivery. A receiver restart clears its in-memory inbox, while successful delivery flags remain in SQLite; explicit resend-all can refill it but can also duplicate events.
+- Impact mapping depends on declared manifests and operation information extracted from finding text. Gate decisions depend on the latest stored analysis.
+- The application is a demo, not a hardened production service; it has no documented authentication or durable webhook queue.
+
+For setup, non-destructive shutdown, test commands and the demo walkthrough, see [README.md](README.md).
