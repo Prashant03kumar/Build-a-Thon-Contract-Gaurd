@@ -1,0 +1,81 @@
+// Contract Guard database — Milestone 1a (schema only; kit import comes in M1b).
+//
+// Design decisions (PLAN.md §7):
+// - Lineage key is (providerId, publishOrder), NOT info.version:
+//   claims-api republished 1.1.0 (file 3 fixed the dangling $ref of file 2),
+//   so a version string may repeat, but a publish slot must never.
+// - JSON payloads are String columns: Prisma's Json type is unsupported on SQLite.
+// - Consumers join by providerName + method + pathNorm (path params normalized
+//   to {param}) so stale consumer paths like /quotes/{id} still match a spec's
+//   /quotes/{quoteId} — the README warns consumers lag the specs.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Provider {
+  id        String        @id @default(cuid())
+  name      String        @unique // "quote-api" | "policy-api" | "claims-api"
+  createdAt DateTime      @default(now())
+  versions  SpecVersion[]
+}
+
+model SpecVersion {
+  id           String   @id @default(cuid())
+  provider     Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  providerId   String
+  version      String // info.version, e.g. "1.1.0" — may repeat across publishOrder (republish, by design)
+  publishOrder Int // 1..n — the authoritative lineage order
+  fileName     String // original file name, for traceability
+  valid        Boolean  @default(true) // false = lint failed (e.g. dangling $ref)
+  raw          String? // raw YAML text (audit trail)
+  canonical    String? // normalized model as JSON — filled by the diff engine (M2)
+  createdAt    DateTime @default(now())
+
+  @@unique([providerId, publishOrder]) // the anti-duplicate guarantee
+  @@index([providerId])
+}
+
+model Consumer {
+  id        String        @id @default(cuid())
+  name      String        @unique // "mobile-app" | "partner-portal" | "payments-svc" | "notifications-svc"
+  team      String
+  createdAt DateTime      @default(now())
+  usages    ConsumerUse[]
+}
+
+model ConsumerUse {
+  id           String   @id @default(cuid())
+  consumer     Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  consumerId   String
+  providerName String // joined by name: consumers may be stored before specs arrive
+  method       String
+  pathRaw      String // "/quotes/{id}" — as written in the consumer file (display)
+  pathNorm     String // "/quotes/{param}" — matching key (params normalized)
+  sendsJson    String // JSON array of request field paths, e.g. ["vehicle.make"]
+  readsJson    String // JSON array of response field paths, e.g. ["premium.breakdown[].amount"]
+
+  @@index([providerName, method, pathNorm]) // impact-join lookup (M3)
+}
+
+model Finding {
+  id          String   @id @default(cuid())
+  provider    String // denormalized for simple queries and exports
+  fromVersion String?
+  toVersion   String?
+  consumer    String? // null = provider-level finding (e.g. x-internal endpoint)
+  severity    String // BREAKING | DEPRECATION | SUNSET_EXPIRED | EARLY_REMOVAL | SPEC_ERROR | WARN | INFO
+  rule        String // rule id, e.g. "response-field-renamed"
+  path        String // field or endpoint the finding is about
+  message     String
+  notified    Boolean  @default(false) // webhook delivery flag; retried on re-analyze
+  createdAt   DateTime @default(now())
+
+  @@index([severity, provider])
+  @@index([notified])
+}
