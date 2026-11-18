@@ -78,7 +78,41 @@ curl http://localhost:3001/api/health
 
 Other API: any unknown `/api/*` path returns `404 {"error":"not found"}`.
 
-## Database (Prisma + SQLite) — M1a done
+## API endpoints (implemented so far)
+
+| Method & path | Status | Purpose |
+| --- | --- | --- |
+| `GET /api/health` | ✅ | Liveness of API + SQLite + webhook receiver (with per-table row counts) |
+| `POST /api/kit/import` | ✅ | Import all specs + consumer manifests from the kit folders (idempotent) |
+| `POST /api/providers/:name/specs` | ✅ | Upload one spec: `{ "fileName": "1-initial.yaml", "content": "<yaml text>" }` |
+| `POST /api/consumers` | ✅ | Upload one consumer manifest: `{ "content": "<yaml text>" }` |
+| `GET /api/providers` | ✅ | Providers + ordered versions + validity flags |
+| `GET /api/consumers` | ✅ | Consumers + usages (sends/reads as arrays) |
+| `GET /api/findings` | ✅ | Import-lint findings (SPEC_ERROR / WARN) |
+| `POST /api/analyze` | ⏳ M2 | Version comparison + breaking-change detection |
+| `POST /api/gate-check` | ⏳ M3 | Publish gate verdict |
+
+## How the kit import works (M1b)
+
+1. **Discover** — each subfolder of `specs/` becomes a provider (upsert by name); `*.yaml`
+   files inside are ordered by their numeric prefix (`3-price-lines.yaml` → publishOrder 3).
+2. **Validate** — every file: YAML parse → `SwaggerParser.validate()` (OpenAPI 3.0.3 schema
+   + `$ref` resolution) → `dereference()` (all `$ref`s inlined). Results stored per row:
+   `version` (`info.version`), `valid`, `raw` (audit trail), `canonical` (resolved JSON).
+3. **Lint** — two checks, findings replaced (never duplicated) per import:
+   - `spec-ref-unresolvable` (SPEC_ERROR): file that fails validation — e.g. the kit's
+     dangling `ClaimDocumnt` ref in claims-api file 2.
+   - `version-republished` (WARN): same `info.version` at two publish slots — e.g. claims
+     `1.1.0` published twice (broken, then corrected).
+4. **Store** — `SpecVersion` upserts by `(providerId, fileName)`; stale rows whose file
+   vanished are removed; `unique(providerId, publishOrder)` makes duplicate slots impossible.
+5. **Consumers** — manifests parsed into `Consumer` + `ConsumerUse` rows (`sends`/`reads`
+   as JSON strings; `pathNorm` normalizes `{id}`/`{quoteId}` to `{param}`); usages are
+   replaced wholesale each import.
+
+Import is **safe to run repeatedly**: same input → same database state, same findings.
+
+## Database (Prisma + SQLite) — done (M1a schema + M1b import)
 
 Five tables (design rationale is commented inline in `server/prisma/schema.prisma`):
 
@@ -118,6 +152,6 @@ import linting (M1b) flags it as a WARN.
 
 ## Notes
 
-- Done: scaffold (M0) + database (M1a). Next: kit import + spec lint (M1b), diff engine (M2) — per `../PLAN.md`.
+- Done: scaffold (M0), database (M1a), import + validation + lint (M1b). Next: diff engine (M2) per `../PLAN.md`.
 - If this project lives inside OneDrive, consider excluding `node_modules` from sync for speed.
 - Import/validation/engine logic is intentionally **not** implemented yet.

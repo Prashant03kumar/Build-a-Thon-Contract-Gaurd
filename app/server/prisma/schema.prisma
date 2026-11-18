@@ -37,7 +37,8 @@ model SpecVersion {
   canonical    String? // normalized model as JSON — filled by the diff engine (M2)
   createdAt    DateTime @default(now())
 
-  @@unique([providerId, publishOrder]) // the anti-duplicate guarantee
+  @@unique([providerId, publishOrder]) // the anti-duplicate guarantee: no two versions share a lineage slot
+  @@unique([providerId, fileName]) // idempotent imports: one row per source file; re-imports update in place
   @@index([providerId])
 }
 

@@ -96,7 +96,7 @@ export default function App() {
         <div className="mt-8 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">Coming next (see PLAN.md)</h2>
           <ul className="list-inside list-disc space-y-1 text-sm text-gray-600">
-            <li>M1 — Ingest &amp; store: kit import, upload API, Prisma/SQLite, spec lint (dangling $ref, republish)</li>
+            <li>M1 ✓ — Ingest &amp; store: 12 specs + 4 consumers imported, $refs resolved, lint findings raised</li>
             <li>M2 — Diff engine: version comparison &amp; breaking-change rules</li>
             <li>M3 — Consumer impact mapping &amp; publish gate</li>
             <li>M4 — Webhook notifications · M5 — Dashboard screens</li>

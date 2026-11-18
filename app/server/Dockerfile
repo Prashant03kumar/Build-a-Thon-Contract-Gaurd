@@ -22,7 +22,8 @@ ENV DATABASE_URL="file:./dummy.db"
 COPY server/package.json server/package-lock.json* ./
 RUN npm install --no-audit --no-fund
 COPY server/ ./
-RUN npm run build && npx prisma generate
+# Generate BEFORE tsc: the generated client provides the real types the build needs.
+RUN npx prisma generate && npm run build
 
 # ---------- 3. runtime ----------
 FROM node:20-slim AS runtime

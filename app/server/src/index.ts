@@ -2,14 +2,19 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import healthRouter from "./routes/health";
+import { router as catalogRouter } from "./routes/catalog";
+import { router as importRouter } from "./routes/import";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const app = express();
 
 app.disable("x-powered-by");
+app.use(express.json({ limit: "2mb" })); // import endpoints accept YAML text bodies
 
 // --- API routes ---
 app.use("/api", healthRouter);
+app.use("/api", catalogRouter);
+app.use("/api", importRouter);
 app.use("/api", (_req, res) => res.status(404).json({ error: "not found" }));
 
 // --- static web UI ---
