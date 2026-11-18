@@ -1,4 +1,4 @@
-# Contract Guard — Dashboard Design (M5)
+# Contract Guard — Dashboard Design (M5, hardened in M6)
 
 The UI is a single-page React dashboard served by the same Express server that
 exposes the API (one container, same origin — no CORS anywhere). It renders
@@ -11,7 +11,7 @@ state.
 ┌────────────────────────────────────────────────────────────────┐
 │ CG  Contract Guard                    ● All systems ok         │  header + health pill
 ├────────────────────────────────────────────────────────────────┤
-│ [Import kit] [Run analyze] [Retry notifications]  last result  │  actions (real pipeline)
+│ [Import kit] [Run analyze] [Resend notifications]  last result │  actions (real pipeline)
 ├──────────────┬──────────────┬──────────────┬──────────────────┤
 │ Providers 3  │ Versions 12  │ Consumers 4  │ Breaking 11      │  overview cards
 ├──────────────┴──────────────┴──────────────┴──────────────────┤
@@ -25,7 +25,8 @@ state.
 │                 affects [mobile-app] ● delivered / ○ pending   │  merged impacts + notified
 ├──────────────────────────────────────┬─────────────────────────┤
 │ CONSUMERS — team · calls · affected  │ WEBHOOK — delivered/    │
-│                                      │ pending · retry · link  │
+│                                      │ pending · resend ·      │
+│                                      │ clear · link            │
 └──────────────────────────────────────┴─────────────────────────┘
 ```
 
@@ -47,9 +48,15 @@ state.
    two by finding id (`mergeFindings` in `api/client.ts`). No backend change needed.
 3. Gate verdicts: one `POST /api/gate-check {provider, publishOrder}` per **valid**
    version (publishOrder avoids the claims-api "1.1.0 is ambiguous" case). Invalid
-   specs are never checked — the UI badges them INVALID SPEC directly.
+   specs are never checked — the UI badges them INVALID SPEC directly. A verdict
+   that failed to load or is still loading shows "…" (unknown), never a misleading
+   verdict — badges only speak when they know.
 4. Health polls every 5 s (same rhythm as the receiver's own page); pipeline data
    reloads after each action button.
+5. Demo controls (M6): **Clear receiver** calls `POST /api/notifications/clear-receiver`
+   (server-side wipe of the kit inbox, no CORS); **Resend notifications** posts
+   `{ resendAll: true }` to re-deliver every BREAKING finding after a clear. The
+   default pending-only retry path stays untouched and never double-posts.
 
 ## Why no router / state library
 

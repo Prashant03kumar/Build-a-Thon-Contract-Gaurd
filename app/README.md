@@ -92,7 +92,8 @@ Other API: any unknown `/api/*` path returns `404 {"error":"not found"}`.
 | `POST /api/analyze` | ✅ M2–M4 | Diff + impact join + webhook delivery in one run (idempotent — re-runs reconcile, never duplicate) |
 | `GET /api/impacts` | ✅ M3 | Findings with their affected consumers |
 | `POST /api/gate-check` | ✅ M3 | Publish gate verdict: `{provider, publishOrder \| version}` → ALLOWED/BLOCKED + who breaks |
-| `POST /api/notifications/retry` | ✅ M4 | Re-deliver every pending BREAKING notification |
+| `POST /api/notifications/retry` | ✅ M4 | Re-deliver pending BREAKING notifications; body `{ "resendAll": true }` re-delivers all of them (demo reset) |
+| `POST /api/notifications/clear-receiver` | ✅ M6 | Wipe the kit receiver's inbox so repeated demos start clean |
 
 ## The dashboard (M5)
 
@@ -107,7 +108,29 @@ One page at http://localhost:3001 (or the Vite dev server), built from real API 
 | Consumers | consumers + impacts | team, call count, providers used, "affected by N findings" |
 | Webhook status | findings' `notified` flags + health | delivered vs pending (BREAKING), receiver reachability, retry button, link to the live receiver page |
 
-Action buttons run the real pipeline: **Import kit** → **Run analyze** (diff + impacts + notifications) → **Retry notifications**. No mock data anywhere; see `DESIGN.md` for the design system and `PROGRESS.md` for milestone status.
+Action buttons run the real pipeline: **Import kit** → **Run analyze** (diff + impacts + notifications) → **Resend notifications** → **Clear receiver**. No mock data anywhere; see `DESIGN.md` for the design system and `PROGRESS.md` for milestone status.
+
+## 5-minute demo script
+
+Everything below happens on two browser tabs + the dashboard buttons (numbers are
+the real values this kit produces):
+
+1. **Start fresh** (optional): `cd app; docker compose down -v; docker compose up -d --build`
+   — an empty database; open http://localhost:3001 and http://localhost:9900.
+2. **Import kit** → overview cards fill: 3 providers · 12 spec versions · 4 consumers ·
+   2 lint findings (the dangling `ClaimDocumnt` $ref SPEC_ERROR + the 1.1.0 republish WARN).
+3. **Run analyze** → 20 findings appear (11 BREAKING incl. B1–B6, 9 INFO), consumer
+   chips land on the affected findings, gate badges turn ALLOWED/BLOCKED, and the
+   receiver tab pops 11 `contract.breaking_change` events (live refresh).
+4. **Show the gate story**: claims v2.0.0 → BLOCKED [mobile-app] (reads `amountApproved`,
+   demoted from required) · policy v2.1.0 → BLOCKED [partner-portal] (must now send
+   `requestedBy`, `type` no longer accepts VEHICLE) · quote v2.1.0 → ALLOWED.
+   On the quote timeline, v1→v2 (cosmetic reorg) shows zero findings — no false positives.
+5. **Resend / clear**: **Clear receiver** empties the inbox, **Resend notifications**
+   re-delivers all 11 — proves retry works and nothing is lost. Default retry mode
+   (pending only) never double-posts.
+6. **Restart-proof**: `docker compose down` (keep volume) → `up -d` → data intact
+   (12 versions, 22 findings).
 
 ## How the kit import works (M1b)
 
@@ -196,7 +219,11 @@ import linting (M1b) flags it as a WARN.
 
 ## Notes
 
-- Done: M0 scaffold · M1 database + import + lint · M2 diff engine · M3 impact + gate · M4 webhook notifications · M5 dashboard. Remaining per `../PLAN.md`: hardening/demo polish (M6).
-- Tests: `npm run test` (engine), `npm run test:m3` (impact/gate), `npm run test:m4` (notifications) — all in `app/server`.
+- **All milestones done**: M0 scaffold · M1 database + import + lint · M2 diff engine ·
+  M3 impact + gate · M4 webhook notifications · M5 dashboard · M6 hardening & demo
+  polish (fresh-database workflow verified end-to-end, compose restart persistence,
+  demo reset controls).
+- Tests: `npm run test` (engine, 29 checks), `npm run test:m3` (impact/gate),
+  `npm run test:m4` (notifications: delivery, failure, retry, no double-post) — all in `app/server`.
 - If this project lives inside OneDrive, consider excluding `node_modules` from sync for speed.
 - Docs: design system in `DESIGN.md`, milestone log in `PROGRESS.md`.
