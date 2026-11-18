@@ -1,51 +1,446 @@
-# Contract Guard starter kit
+# Contract Guard
 
-Everything you need to build **Contract Guard**, the API contract registry. Read the problem statement first.
+Contract Guard is an API contract registry and publishing-safety checker for
+versioned provider APIs. It imports OpenAPI specifications and consumer usage
+manifests, detects selected breaking changes, identifies registered affected
+consumers and exposes a publishing gate.
 
-## Start the kit
+The current MVP has completed M0–M3. The React app is still a health-status
+scaffold; notification delivery and the full dashboard are planned, not
+implemented. See [DESIGN.md](./DESIGN.md) for architecture and
+[PROGRESS.md](./PROGRESS.md) for status and evidence. [PLAN.md](./PLAN.md)
+contains the original product requirements.
 
-From this folder:
+## Implemented features
 
-- **Docker:** `docker compose up --build`
-- **Podman:** `podman compose up --build` (needs `podman compose` or `podman-compose`)
+- Import and validate OpenAPI specifications, resolve `$ref`s, retain invalid
+  inputs and report selected import lint findings.
+- Store provider versions by publish order, including repeated version strings.
+- Compare consecutive valid versions and record breaking/informational findings.
+- Match supported breaking findings to consumer usage records; exclude
+  `x-internal` operations from external consumer attribution.
+- Check releases through a publishing-gate API.
+- Run locally with Docker Compose or as separate server and Vite processes.
 
-This starts a **webhook receiver** at http://localhost:9900. It stands in for chat and email: anything POSTed to it appears on its page. `GET /api/received` returns the list as JSON, and `DELETE /api/received` clears it. If port 9900 is already in use, start the kit with another port, for example `WEBHOOK_PORT=9950 docker compose up --build`.
+## Technology stack and prerequisites
 
-Everything else in the kit is plain files.
+- Node.js 20 or newer and npm.
+- Docker Desktop with Docker Compose v2 (recommended), or Python 3 for running
+  the starter-kit webhook receiver without Docker.
+- Backend: Express, TypeScript, Prisma and SQLite.
+- Frontend: React, Vite, TypeScript and Tailwind CSS v4.
 
-## API specifications: `specs/`
+Tests currently use `tsx` and Node's assertion library. Vitest is listed in the
+original plan but is not installed/configured in the current packages.
 
-Three provider services, each with four versions of its OpenAPI 3.0.3 specification, numbered in the order the owning team wants to publish them:
+## Installation and setup
 
-| Service | Owner | Files |
-| --- | --- | --- |
-| `quote-api` | Quotes team | `specs/quote-api/1-initial.yaml` … `4-ncb-and-taxes.yaml` |
-| `policy-api` | Policy team | `specs/policy-api/1-initial.yaml` … `4-endorsement-rules.yaml` |
-| `claims-api` | Claims team | `specs/claims-api/1-initial.yaml` … `4-approval-later.yaml` |
+Clone or open the project, then work from its root directory. The supplied
+`specs/` and `consumers/` folders are read-only input for the importer; do not
+modify them for normal development.
 
-- The version number of each specification is in `info.version`.
-- Specifications reuse components through `$ref`. All references point inside the same file.
-- Some specifications mark operations or fields with extensions such as `x-internal` and `x-sunset`. Ask the product owner what they mean.
-- Some versions contain problems you'll want Contract Guard to catch.
+### Option A: Docker Compose (recommended)
 
-## Consumers: `consumers/`
+Docker Compose builds the API/UI container and the webhook-receiver container.
+The starter-kit folders are mounted read-only and the SQLite database persists
+in a named volume.
 
-One YAML file per service that calls these APIs: `mobile-app`, `partner-portal`, `payments-svc` and `notifications-svc`. Each file says which endpoints the service calls, what it sends, and what it reads:
-
-```yaml
-consumer: mobile-app
-team: Mobile
-uses:
-  - provider: quote-api
-    method: POST
-    path: /quotes
-    sends: [vehicle.make, vehicle.cc, rider.age]      # request fields and parameters it sends
-    reads: [quoteId, premium.breakdown[].amount]      # response fields it reads
+```powershell
+cd app
+docker compose up --build
 ```
 
-Field paths use dots for nested fields and `[]` for items in a list. Consumer files describe what each service used when the file was written; the specs may have moved on since.
+Open:
 
-## Rules
+- Contract Guard UI/API: <http://localhost:3001>
+- Health endpoint: <http://localhost:3001/api/health>
+- Starter-kit webhook receiver: <http://localhost:9900>
 
-- **Don't change the files in `specs/` or `consumers/`**: the evaluators test your product against the original kit. Copy them if you want to experiment.
-- How Contract Guard reads these files (upload through your API or UI, import from the folder, or both) is your decision.
+Stop with `Ctrl+C`, or from another terminal run:
+
+```powershell
+cd app
+docker compose down
+```
+
+To change the receiver's host port, set `WEBHOOK_PORT` before starting Compose:
+
+```powershell
+$env:WEBHOOK_PORT = "9950"
+docker compose up --build
+```
+
+The receiver will then be available on port 9950. Do not use `docker compose
+down -v` unless you intend to delete the persisted database volume.
+
+### Option B: local development
+
+Open three terminals. Local development uses the same Compose file to run the
+receiver, while the API and frontend run in Node.
+
+**Terminal 1 — webhook receiver**
+
+```powershell
+cd app
+docker compose up webhook-receiver
+```
+
+Alternatively, run its standard-library Python app directly:
+
+```powershell
+cd app
+$env:PORT = "9900"
+python webhook-receiver\app.py
+```
+
+**Terminal 2 — API**
+
+```powershell
+cd app\server
+npm ci
+npm run db:generate
+npm run db:deploy
+npm run dev
+```
+
+The API listens on port 3001 by default. When `DATABASE_URL` is unset, the
+server's Prisma client defaults to `app/server/prisma/dev.db`. Prisma CLI
+commands require `DATABASE_URL`; configure it in the server's environment or
+local `.env` file, for example:
+
+```dotenv
+DATABASE_URL="file:./dev.db"
+```
+
+The value above is a local SQLite path, not a secret. Do not commit credentials
+or private connection strings.
+
+**Terminal 3 — frontend**
+
+```powershell
+cd app\web
+npm ci
+npm run dev
+```
+
+Open <http://localhost:5173>. Vite proxies `/api` calls to
+<http://localhost:3001>.
+
+## Environment variables
+
+No API keys or passwords are required by the current local setup.
+
+| Variable | Default/Compose value | Purpose |
+| --- | --- | --- |
+| `PORT` | `3001` | Express API port. The receiver uses its own `PORT` (`9000` in Compose). |
+| `DATABASE_URL` | Local server fallback: `app/server/prisma/dev.db`; Compose: `file:/data/guard.db` | Prisma SQLite connection string. |
+| `WEBHOOK_BASE` | `http://localhost:9900` | Receiver base URL used by the API health check. Compose sets the service URL. |
+| `KIT_DATA_DIR` | Local kit paths are discovered from the working directory; Compose sets `/kit` | Base directory containing `specs/` and `consumers/`. |
+| `KIT_SPECS_DIR` | Derived from `KIT_DATA_DIR` or local kit location | Optional explicit specs directory override. |
+| `KIT_CONSUMERS_DIR` | Derived from `KIT_DATA_DIR` or local kit location | Optional explicit consumer-manifests directory override. |
+| `WEBHOOK_PORT` | `9900` | Host port mapped to the receiver by Compose. |
+
+## Import and analyze the starter kit
+
+With the API running, use PowerShell's `Invoke-RestMethod`:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:3001/api/kit/import" `
+  -ContentType "application/json" `
+  -Body "{}"
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:3001/api/analyze" `
+  -ContentType "application/json" `
+  -Body "{}"
+```
+
+The import response reports provider/spec/consumer counts and lint findings.
+Analysis reports findings created per provider plus total findings and impact
+associations. Running import/analyze again is intended to be idempotent.
+
+To inspect stored results:
+
+```powershell
+Invoke-RestMethod "http://localhost:3001/api/providers"
+Invoke-RestMethod "http://localhost:3001/api/consumers"
+Invoke-RestMethod "http://localhost:3001/api/findings"
+Invoke-RestMethod "http://localhost:3001/api/impacts"
+```
+
+## API reference
+
+All API paths are prefixed with `/api`; JSON request examples below assume the
+server is listening on `localhost:3001`.
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /api/health` | API, database and webhook-receiver health. |
+| `GET /api/providers` | Providers and ordered version metadata. |
+| `GET /api/consumers` | Consumer details and registered usages. |
+| `GET /api/findings` | Stored findings, newest first. |
+| `GET /api/impacts` | Findings with affected consumer names. |
+| `POST /api/kit/import` | Import mounted/local starter-kit data. |
+| `POST /api/providers/:name/specs` | Upload one YAML specification. |
+| `POST /api/consumers` | Upload one YAML consumer manifest. |
+| `POST /api/analyze` | Recompute diffs and consumer impacts. |
+| `POST /api/gate-check` | Check whether a release has consumer-facing breaks. |
+| `POST /api/publish/check` | Alias for `/api/gate-check`. |
+
+### Health
+
+```http
+GET /api/health
+```
+
+Example response shape:
+
+```json
+{
+  "status": "ok",
+  "service": "contract-guard-api",
+  "uptimeSeconds": 12,
+  "timestamp": "2026-11-18T00:00:00.000Z",
+  "database": {
+    "reachable": true,
+    "tables": {
+      "providers": 3,
+      "specVersions": 12,
+      "consumers": 4,
+      "consumerUses": 10,
+      "findings": 22
+    },
+    "error": null
+  },
+  "webhookReceiver": {
+    "url": "http://localhost:9900",
+    "reachable": true,
+    "latencyMs": 4,
+    "error": null
+  }
+}
+```
+
+Counts are illustrative and depend on the database; an unreachable database or
+receiver is reported as `degraded` in the response body.
+
+### Import a spec or consumer manifest
+
+`POST /api/providers/:name/specs` expects a bare YAML filename and YAML
+contents:
+
+```json
+{
+  "fileName": "5-next.yaml",
+  "content": "openapi: 3.0.3\ninfo:\n  title: Example API\n  version: 3.0.0\npaths: {}\n"
+}
+```
+
+`POST /api/consumers` accepts a manifest as YAML text:
+
+```json
+{
+  "content": "consumer: checkout\nteam: Commerce\nuses:\n  - provider: quote-api\n    method: GET\n    path: /quotes/{id}\n    sends: []\n    reads: [quoteId, status]\n"
+}
+```
+
+Example PowerShell upload:
+
+```powershell
+$body = @{
+  content = @"
+consumer: checkout
+team: Commerce
+uses:
+  - provider: quote-api
+    method: GET
+    path: /quotes/{id}
+    sends: []
+    reads: [quoteId, status]
+"@
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:3001/api/consumers" `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+### Analyze
+
+```http
+POST /api/analyze
+Content-Type: application/json
+
+{}
+```
+
+The response includes `created`, a per-provider report, and `totals` with
+finding and impact counts. With the starter kit, the engine comparison emits
+20 findings: 11 `BREAKING` and 9 `INFO`. Import lint findings are additional.
+
+### Read consumer impacts
+
+```http
+GET /api/impacts
+```
+
+Response shape:
+
+```json
+{
+  "findings": [
+    {
+      "id": "finding-id",
+      "provider": "quote-api",
+      "fromVersion": "1.1.0",
+      "toVersion": "2.0.0",
+      "severity": "BREAKING",
+      "rule": "response-field-renamed",
+      "path": "premium.breakdown[].amount",
+      "message": "Response field changed ...",
+      "affectedConsumers": ["mobile-app"]
+    }
+  ]
+}
+```
+
+The id and message above are illustrative. `GET /api/findings` returns stored
+finding rows directly; neither endpoint currently supports filters.
+
+### Check a release
+
+Prefer `publishOrder` because a provider may republish the same version string:
+
+```http
+POST /api/gate-check
+Content-Type: application/json
+
+{
+  "provider": "quote-api",
+  "publishOrder": 3
+}
+```
+
+Verified response for quote-api order 3:
+
+```json
+{
+  "decision": "BLOCKED",
+  "result": "block",
+  "blocked": true,
+  "provider": "quote-api",
+  "publishOrder": 3,
+  "version": "2.0.0",
+  "affectedConsumers": ["mobile-app"],
+  "breakingFields": ["premium.breakdown[].amount"],
+  "explanation": "Publishing is blocked because mobile-app would be affected.",
+  "warnings": [
+    {
+      "rule": "request-param-required-added",
+      "path": "DELETE /internal/pricing-cache · query param 'region'",
+      "message": "DELETE /internal/pricing-cache: new required query parameter 'region' in 2.0.0 (x-internal endpoint — internal contract change, not consumer-facing). Callers that do not send it will fail."
+    }
+  ]
+}
+```
+
+Quote-api order 4 (`2.1.0`) was verified to return `decision: "ALLOWED"` and
+`result: "allow"`.
+
+You may also supply `"version": "2.0.0"` or `"targetVersion": "2.0.0"`. If
+the version string is duplicated, the endpoint responds with an ambiguity error
+and asks for `publishOrder`. A missing provider/version, invalid order or
+invalid target spec returns an HTTP error. Run `POST /api/analyze` after
+importing new data before checking a release: the gate reads stored findings
+and does not run analysis itself.
+
+## Database and Prisma commands
+
+Run these from `app/server`:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run db:generate` | Generate Prisma Client from the schema. |
+| `npm run db:deploy` | Apply committed migrations non-interactively. |
+| `npm run db:migrate` | Run Prisma's development migration workflow. |
+| `npm run db:studio` | Open Prisma Studio. |
+| `npm run db:smoke` | Run the database schema smoke script. |
+
+Docker applies migrations automatically at startup and stores data in the
+`guard-data` volume. Local runtime defaults to `app/server/prisma/dev.db`.
+Prisma CLI operations need a valid `DATABASE_URL`.
+
+## Local development commands
+
+Backend, from `app/server`:
+
+```powershell
+npm ci
+npm run db:generate
+npm run db:deploy
+npm run dev
+```
+
+Frontend, from `app/web`:
+
+```powershell
+npm ci
+npm run dev
+```
+
+Available package scripts also include:
+
+- Server: `npm run build`, `npm run typecheck`, `npm run test`,
+  `npm run test:m3`.
+- Web: `npm run build`, `npm run typecheck`, `npm run preview`.
+
+## Tests
+
+Run from `app/server`:
+
+```powershell
+npm ci
+npm run test
+npm run typecheck
+npm run build
+```
+
+`npm run test` runs the M2 engine suite against the actual kit specifications;
+it does not require the database. `npm run test:m3` runs the integration
+checks against the database, imports the original kit and runs analysis twice.
+Use a development database because this test updates imported records and
+findings.
+
+Current verified results: M2 29/29 checks pass; M3 real-kit checks pass,
+including repeat-analysis and B1–B6 impact expectations. The frontend build
+was not verified in the latest documentation session because its dependencies
+were not installed (`tsc` was unavailable); run `npm ci` in `app/web` before
+validating it.
+
+## Troubleshooting
+
+- **`prisma` or `tsx` is not recognized:** run `npm ci` in `app/server`, then
+  `npm run db:generate`.
+- **`DATABASE_URL` missing / Prisma cannot open SQLite:** set it for the
+  server process or Prisma CLI, for example `DATABASE_URL="file:./dev.db"`
+  in `app/server/.env`. Check that the selected directory is writable.
+- **Prisma schema/client mismatch:** run `npm run db:generate` after schema
+  changes; apply existing migrations with `npm run db:deploy`.
+- **Port 3001 or 5173 is occupied:** stop the other process or change the
+  relevant local `PORT`/Vite configuration. For receiver port conflicts, set
+  `WEBHOOK_PORT` before Compose startup.
+- **Health is `degraded`:** check its `database` and `webhookReceiver` fields.
+  The default local receiver URL is `http://localhost:9900`; start the receiver
+  or set `WEBHOOK_BASE` to its actual base URL.
+- **Kit import cannot find specs/consumers:** run from the project layout with
+  the starter-kit folders present, or set `KIT_SPECS_DIR` and
+  `KIT_CONSUMERS_DIR`; Docker Compose mounts them under `/kit`.
+- **Gate says allowed after an upload:** run analysis after import. The gate
+  currently reads stored findings rather than analyzing the target itself.
+
+## Screenshots
+
+The dashboard is future work; no project dashboard screenshots are available
+yet. Add screenshots here after the M5 screens are implemented and verified.

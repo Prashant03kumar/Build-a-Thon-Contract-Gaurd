@@ -48,6 +48,7 @@ model Consumer {
   team      String
   createdAt DateTime      @default(now())
   usages    ConsumerUse[]
+  impacts   FindingConsumer[]
 }
 
 model ConsumerUse {
@@ -76,7 +77,18 @@ model Finding {
   message     String
   notified    Boolean  @default(false) // webhook delivery flag; retried on re-analyze
   createdAt   DateTime @default(now())
+  impacts     FindingConsumer[]
 
   @@index([severity, provider])
   @@index([notified])
+}
+
+model FindingConsumer {
+  finding   Finding  @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  findingId String
+  consumer  Consumer @relation(fields: [consumerId], references: [id], onDelete: Cascade)
+  consumerId String
+
+  @@id([findingId, consumerId])
+  @@index([consumerId])
 }

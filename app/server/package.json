@@ -13,7 +13,8 @@
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
     "db:smoke": "tsx prisma/smoke.ts",
-    "test": "tsx src/engine/engine.test.ts"
+    "test": "tsx src/engine/engine.test.ts",
+    "test:m3": "tsx src/m3.test.ts"
   },
   "dependencies": {
     "@apidevtools/swagger-parser": "^10.1.0",
