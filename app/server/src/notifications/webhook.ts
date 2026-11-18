@@ -15,6 +15,8 @@ export type NotificationOptions = {
   fetcher?: typeof fetch;
   timeoutMs?: number;
   provider?: string;
+  /** Re-deliver every BREAKING finding even if already notified (demo reset after clearing the receiver). */
+  resendAll?: boolean;
 };
 
 export async function sendPendingBreakingNotifications(
@@ -23,7 +25,7 @@ export async function sendPendingBreakingNotifications(
   const findings = await prisma.finding.findMany({
     where: {
       severity: "BREAKING",
-      notified: false,
+      ...(options.resendAll ? {} : { notified: false }),
       ...(options.provider ? { provider: options.provider } : {}),
     },
     include: { impacts: { include: { consumer: true } } },

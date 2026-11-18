@@ -88,9 +88,26 @@ Other API: any unknown `/api/*` path returns `404 {"error":"not found"}`.
 | `POST /api/consumers` | ✅ | Upload one consumer manifest: `{ "content": "<yaml text>" }` |
 | `GET /api/providers` | ✅ | Providers + ordered versions + validity flags |
 | `GET /api/consumers` | ✅ | Consumers + usages (sends/reads as arrays) |
-| `GET /api/findings` | ✅ | Import-lint findings (SPEC_ERROR / WARN) |
-| `POST /api/analyze` | ✅ M2 | Diff consecutive versions per provider; stores findings (idempotent — re-runs replace, never duplicate) |
-| `POST /api/gate-check` | ⏳ M3 | Publish gate verdict |
+| `GET /api/findings` | ✅ | All findings (raw rows incl. the `notified` flag) |
+| `POST /api/analyze` | ✅ M2–M4 | Diff + impact join + webhook delivery in one run (idempotent — re-runs reconcile, never duplicate) |
+| `GET /api/impacts` | ✅ M3 | Findings with their affected consumers |
+| `POST /api/gate-check` | ✅ M3 | Publish gate verdict: `{provider, publishOrder \| version}` → ALLOWED/BLOCKED + who breaks |
+| `POST /api/notifications/retry` | ✅ M4 | Re-deliver every pending BREAKING notification |
+
+## The dashboard (M5)
+
+One page at http://localhost:3001 (or the Vite dev server), built from real API data only:
+
+| Section | Source endpoint | Shows |
+| --- | --- | --- |
+| Overview cards | providers / consumers / impacts | providers · spec versions · consumers · breaking-change count |
+| Publishing gate | `POST /api/gate-check` per version | ALLOWED / BLOCKED / INVALID-SPEC per publish slot; latest-version verdict per provider with affected consumers |
+| Providers & versions | providers | publishOrder timeline, file names, validity, gate badge, findings count |
+| Findings | `GET /api/impacts` + `GET /api/findings` (merged by id) | severity chip, version pair, rule, field path, message, affected consumers, delivery dot |
+| Consumers | consumers + impacts | team, call count, providers used, "affected by N findings" |
+| Webhook status | findings' `notified` flags + health | delivered vs pending (BREAKING), receiver reachability, retry button, link to the live receiver page |
+
+Action buttons run the real pipeline: **Import kit** → **Run analyze** (diff + impacts + notifications) → **Retry notifications**. No mock data anywhere; see `DESIGN.md` for the design system and `PROGRESS.md` for milestone status.
 
 ## How the kit import works (M1b)
 
@@ -175,10 +192,11 @@ import linting (M1b) flags it as a WARN.
 | `compose.yaml` | Our runtime: `guard` + kit's `webhook-receiver` (kit compose untouched) |
 | `.dockerignore` / `.gitignore` | Keep images/repos clean |
 | `server/` | Express + TypeScript API, Prisma/SQLite (`prisma/schema.prisma`, migrations, `smoke.ts`), multi-stage `Dockerfile` |
-| `web/` | React + Vite + TypeScript + Tailwind v4 (`src/App.tsx` status page, `src/api/client.ts`) |
+| `web/` | React + Vite + TypeScript + Tailwind v4 dashboard (`src/App.tsx`, `src/components/ui.tsx`, `src/api/client.ts`) |
 
 ## Notes
 
-- Done: scaffold (M0), database (M1a), import + validation + lint (M1b), diff engine (M2). Next: consumer impact + gate (M3) per `../PLAN.md`.
+- Done: M0 scaffold · M1 database + import + lint · M2 diff engine · M3 impact + gate · M4 webhook notifications · M5 dashboard. Remaining per `../PLAN.md`: hardening/demo polish (M6).
+- Tests: `npm run test` (engine), `npm run test:m3` (impact/gate), `npm run test:m4` (notifications) — all in `app/server`.
 - If this project lives inside OneDrive, consider excluding `node_modules` from sync for speed.
-- Import/validation/engine logic is intentionally **not** implemented yet.
+- Docs: design system in `DESIGN.md`, milestone log in `PROGRESS.md`.
