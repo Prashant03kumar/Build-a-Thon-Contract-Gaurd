@@ -3,40 +3,15 @@
 //   POST /api/providers/:name/specs   — upload one spec (F1 upload path)
 //   POST /api/consumers               — upload one consumer manifest (F1 upload path)
 import { Router } from "express";
-import fs from "node:fs";
-import path from "node:path";
 import { prisma } from "../db";
 // import type { Prisma } from "@prisma/client";
 import { importKit, syncConsumer } from "../ingest/kitImport";
 import { parseSpec } from "../ingest/parseSpec";
 import { parseConsumerManifest } from "../ingest/parseConsumer";
 import { recomputeProviderLint } from "../ingest/lint";
+import { kitDirs } from "../ingest/kitPaths";
 
 export const router = Router();
-
-// Kit data locations: compose mounts the folders at $KIT_DATA_DIR/specs|consumers;
-// locally, the starter kit sits two levels above app/server (the npm cwd).
-function defaultKitDir(sub: "specs" | "consumers"): string {
-  const base = [
-    path.resolve(process.cwd(), "..", ".."), // app/server → starter-kit root
-    path.resolve(process.cwd(), "..", "..", ".."), // fallback for alternate cwd
-  ].find((candidate) => fs.existsSync(path.join(candidate, sub)));
-  return path.join(base ?? path.resolve(process.cwd(), "..", ".."), sub);
-}
-
-function kitDirs() {
-  const specsDir =
-    process.env.KIT_SPECS_DIR ??
-    (process.env.KIT_DATA_DIR
-      ? path.join(process.env.KIT_DATA_DIR, "specs")
-      : defaultKitDir("specs"));
-  const consumersDir =
-    process.env.KIT_CONSUMERS_DIR ??
-    (process.env.KIT_DATA_DIR
-      ? path.join(process.env.KIT_DATA_DIR, "consumers")
-      : defaultKitDir("consumers"));
-  return { specsDir, consumersDir };
-}
 
 router.post("/kit/import", async (_req, res) => {
   try {

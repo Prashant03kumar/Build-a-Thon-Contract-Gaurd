@@ -89,7 +89,7 @@ Other API: any unknown `/api/*` path returns `404 {"error":"not found"}`.
 | `GET /api/providers` | ✅ | Providers + ordered versions + validity flags |
 | `GET /api/consumers` | ✅ | Consumers + usages (sends/reads as arrays) |
 | `GET /api/findings` | ✅ | Import-lint findings (SPEC_ERROR / WARN) |
-| `POST /api/analyze` | ⏳ M2 | Version comparison + breaking-change detection |
+| `POST /api/analyze` | ✅ M2 | Diff consecutive versions per provider; stores findings (idempotent — re-runs replace, never duplicate) |
 | `POST /api/gate-check` | ⏳ M3 | Publish gate verdict |
 
 ## How the kit import works (M1b)
@@ -111,6 +111,33 @@ Other API: any unknown `/api/*` path returns `404 {"error":"not found"}`.
    replaced wholesale each import.
 
 Import is **safe to run repeatedly**: same input → same database state, same findings.
+
+## How version comparison works (M2)
+
+`POST /api/analyze` runs the diff engine over what M1 stored:
+
+1. **Normalize** — each version's stored `canonical` (already $ref-free) becomes an
+   operation map keyed by `METHOD|<path with {param}>`, keeping `x-internal`,
+   parameters, request schema and per-status response schemas. Path-param renames
+   (`{id}` → `{quoteId}`) normalize away, so cosmetic reorgs never diff.
+2. **Bridge invalid specs** — only versions that validated become diff endpoints;
+   a broken version is jumped over (claims-api diffs run 1→3 and 3→4).
+3. **Rule engine** — direction-aware rules per operation:
+   - BREAKING: response field removed / renamed, required demoted; request field
+     now required, enum narrowed; new required parameter (tagged `x-internal` in
+     the message when internal — no consumer blame later).
+   - INFO: optional fields added, enums widened, new response status, new operation.
+4. **Store** — findings land in the `Finding` table (`consumer: null` until the M3
+   impact join). Engine rules are deleted-and-recomputed per run, so repeated
+   analyses never duplicate; import-lint findings are untouched.
+
+Engine tests (`npm run test`, in `server`) assert all kit breakages B1–B6 are
+detected and quote-api's cosmetic v1→v2 reorg yields zero findings.
+
+On the starter kit the engine produces **20 findings per run**: 11 BREAKING
+(B1–B6 — some surface once per operation because shared schemas like `Quote` are
+returned by two endpoints) + 9 INFO. Together with the 2 import-lint findings the
+`Finding` table holds 22 rows.
 
 ## Database (Prisma + SQLite) — done (M1a schema + M1b import)
 
@@ -152,6 +179,6 @@ import linting (M1b) flags it as a WARN.
 
 ## Notes
 
-- Done: scaffold (M0), database (M1a), import + validation + lint (M1b). Next: diff engine (M2) per `../PLAN.md`.
+- Done: scaffold (M0), database (M1a), import + validation + lint (M1b), diff engine (M2). Next: consumer impact + gate (M3) per `../PLAN.md`.
 - If this project lives inside OneDrive, consider excluding `node_modules` from sync for speed.
 - Import/validation/engine logic is intentionally **not** implemented yet.
