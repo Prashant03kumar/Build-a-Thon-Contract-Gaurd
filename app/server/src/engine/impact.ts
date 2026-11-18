@@ -13,7 +13,7 @@ type FindingLike = {
 export function findingOperation(finding: FindingLike): { method: string; path: string } | null {
   const match = `${finding.message}\n${finding.path}`.match(/\b(GET|POST|PUT|PATCH|DELETE)\s+(\/[^\s·:]+)/i);
   if (!match) return null;
-  return { method: normalizeMethod(match[1]), path: normalizePathTemplate(match[2]) };
+  return { method: normalizeMethod(match[1]), path: match[2] };
 }
 
 function fieldKey(value: string): string {
@@ -58,7 +58,7 @@ export async function recomputeFindingImpacts(): Promise<number> {
       where: {
         providerName: finding.provider,
         method: operation.method,
-        pathNorm: operation.path,
+        pathNorm: normalizePathTemplate(operation.path),
       },
       include: { consumer: true },
     });

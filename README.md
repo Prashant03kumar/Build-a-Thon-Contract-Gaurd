@@ -5,9 +5,9 @@ versioned provider APIs. It imports OpenAPI specifications and consumer usage
 manifests, detects selected breaking changes, identifies registered affected
 consumers and exposes a publishing gate.
 
-The current MVP has completed M0–M3. The React app is still a health-status
-scaffold; notification delivery and the full dashboard are planned, not
-implemented. See [DESIGN.md](./DESIGN.md) for architecture and
+The current MVP has completed M0–M4. The React app is still a health-status
+scaffold; the full dashboard is planned, not implemented. See
+[DESIGN.md](./DESIGN.md) for architecture and
 [PROGRESS.md](./PROGRESS.md) for status and evidence. [PLAN.md](./PLAN.md)
 contains the original product requirements.
 
@@ -20,6 +20,8 @@ contains the original product requirements.
 - Match supported breaking findings to consumer usage records; exclude
   `x-internal` operations from external consumer attribution.
 - Check releases through a publishing-gate API.
+- Notify the webhook receiver about pending BREAKING findings and retry failed
+  deliveries.
 - Run locally with Docker Compose or as separate server and Vite processes.
 
 ## Technology stack and prerequisites
@@ -185,6 +187,7 @@ server is listening on `localhost:3001`.
 | `POST /api/providers/:name/specs` | Upload one YAML specification. |
 | `POST /api/consumers` | Upload one YAML consumer manifest. |
 | `POST /api/analyze` | Recompute diffs and consumer impacts. |
+| `POST /api/notifications/retry` | Retry pending BREAKING finding notifications. |
 | `POST /api/gate-check` | Check whether a release has consumer-facing breaks. |
 | `POST /api/publish/check` | Alias for `/api/gate-check`. |
 
@@ -276,9 +279,60 @@ Content-Type: application/json
 {}
 ```
 
-The response includes `created`, a per-provider report, and `totals` with
-finding and impact counts. With the starter kit, the engine comparison emits
-20 findings: 11 `BREAKING` and 9 `INFO`. Import lint findings are additional.
+The response includes `created`, a per-provider report, `totals` with finding
+and impact counts, and `notifications` with attempted/delivered/failed counts.
+With the starter kit, the engine comparison emits 20 findings: 11 `BREAKING`
+and 9 `INFO`. Import lint findings are additional.
+
+Analysis preserves existing engine finding IDs and `notified` state when the
+same change is found again. New BREAKING findings are posted to
+`{WEBHOOK_BASE}/contract-guard`; successful 2xx responses are marked notified.
+Failed deliveries are logged, included in the response count, and remain
+pending without interrupting analysis.
+
+Example notification body received by the starter-kit receiver:
+
+```json
+{
+  "event": "contract.breaking_change",
+  "findingId": "finding-id",
+  "provider": "quote-api",
+  "fromVersion": "1.1.0",
+  "toVersion": "2.0.0",
+  "severity": "BREAKING",
+  "affectedApiPath": "POST /quotes",
+  "findingPath": "premium.breakdown[].amount",
+  "explanation": "POST /quotes: response field 'premium.breakdown[].amount' was renamed to 'premium.breakdown[].value' in 2.0.0. Consumers reading 'premium.breakdown[].amount' will break.",
+  "affectedConsumers": ["mobile-app"]
+}
+```
+
+`POST /api/notifications/retry` explicitly retries all pending BREAKING
+findings:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:3001/api/notifications/retry" `
+  -ContentType "application/json" `
+  -Body "{}"
+```
+
+Example response:
+
+```json
+{
+  "attempted": 1,
+  "delivered": 1,
+  "failed": 0,
+  "failures": []
+}
+```
+
+Repeated analysis does not resend a successfully marked finding. Receiver
+failures stay pending and are retried by a later analysis or this endpoint.
+Exactly-once delivery across a process crash after receiver acceptance but
+before SQLite records success is not guaranteed because the receiver has no
+idempotency support.
 
 ### Read consumer impacts
 
@@ -393,7 +447,7 @@ npm run dev
 Available package scripts also include:
 
 - Server: `npm run build`, `npm run typecheck`, `npm run test`,
-  `npm run test:m3`.
+  `npm run test:m3`, `npm run test:m4`.
 - Web: `npm run build`, `npm run typecheck`, `npm run preview`.
 
 ## Tests
@@ -410,12 +464,13 @@ npm run build
 `npm run test` runs the M2 engine suite against the actual kit specifications;
 it does not require the database. `npm run test:m3` runs the integration
 checks against the database, imports the original kit and runs analysis twice.
-Use a development database because this test updates imported records and
-findings.
+`npm run test:m4` also requires the database; it creates and removes uniquely
+named fixture records and runs an in-process HTTP receiver. Use a development
+database because the M3 test updates imported records and findings.
 
-Current verified results: M2 29/29 checks pass; M3 real-kit checks pass,
-including repeat-analysis and B1–B6 impact expectations. The frontend build
-was not verified in the latest documentation session because its dependencies
+Current verified results: M2 29/29 checks pass; M3 real-kit checks and M4
+webhook delivery/retry checks pass. Server type-check and build pass. The
+frontend build was not verified in the latest session because its dependencies
 were not installed (`tsc` was unavailable); run `npm ci` in `app/web` before
 validating it.
 

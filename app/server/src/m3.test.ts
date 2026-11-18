@@ -9,8 +9,14 @@ async function main(): Promise<void> {
   await importKit(dirs.specsDir, dirs.consumersDir);
 
   const first = await runAnalysis();
+  const findingCountAfterFirst = await prisma.finding.count();
   const second = await runAnalysis();
-  assert.strictEqual(second.created, first.created, "repeat analysis must create the same engine count");
+  assert.strictEqual(second.created, 0, "repeat analysis must not create engine findings");
+  assert.strictEqual(
+    await prisma.finding.count(),
+    findingCountAfterFirst,
+    "repeat analysis must not duplicate findings",
+  );
 
   const findings = await prisma.finding.findMany({
     include: { impacts: { include: { consumer: true } } },

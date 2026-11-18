@@ -22,17 +22,18 @@ Browser ──► React + Vite (local :5173)
              Express API (:3001) ──► SQLite via Prisma
                     │
                     ├─ reads starter-kit specs and consumer manifests
-                    └─ checks webhook receiver reachability
+                    ├─ checks webhook receiver reachability
+                    └─ posts pending BREAKING findings to the receiver
 
 Docker Compose: Express serves the built React app and accesses the
 read-only-mounted kit data; a separate service runs the webhook receiver.
 ```
 
 **Implemented:** scaffold, SQLite persistence, specification/consumer import,
-comparison engine, consumer-impact associations and publishing-check routes.
-The deployed UI is still a health-status scaffold. Webhook delivery,
-the planned findings/impact dashboard and broader hardening/demo work are not
-implemented.
+comparison engine, consumer-impact associations, publishing-check routes and
+breaking-finding webhook delivery with retry. The deployed UI is still a
+health-status scaffold. The planned findings/impact dashboard and broader
+hardening/demo work are not implemented.
 
 ## Technology stack
 
@@ -86,8 +87,8 @@ Express exposes health, import, catalog, analysis, impact and publishing-check
 routes. Ingestion validates and persists specs and manifests. The engine
 compares stored valid specs and writes findings. The impact step associates
 breaking findings with registered consumers. SQLite is the application store;
-the webhook receiver is currently checked by the health route but is not sent
-finding notifications.
+the health route checks the webhook receiver and M4 sends BREAKING findings to
+it after analysis.
 
 ## Database model
 
@@ -100,12 +101,13 @@ stored in SQLite-compatible string columns.
 | `SpecVersion` | Provider-owned specification version, publish order, source filename, validity, raw YAML and canonical JSON. `(providerId, publishOrder)` and `(providerId, fileName)` are unique. Version strings may repeat. |
 | `Consumer` | Unique consumer name and team; has many `ConsumerUse` rows and impact associations. |
 | `ConsumerUse` | Provider, method and path used by a consumer; stores original and normalized paths plus `sendsJson` and `readsJson`. |
-| `Finding` | Provider, from/to version strings, severity, rule, field/operation path, message and notification flag. `consumer` is a denormalized display field. |
+| `Finding` | Provider, from/to version strings, severity, rule, field/operation path, message and notification flag. `notified=true` means the receiver accepted the POST. `consumer` is a denormalized display field. |
 | `FindingConsumer` | Many-to-many join between findings and consumers, with a composite primary key to prevent duplicate impact links. |
 
 `FindingConsumer` was added for M3 so one finding can name multiple consumers
 without duplicating the finding itself. Deleting a finding or consumer cascades
-to its association rows.
+to its association rows. M4 reuses `Finding.notified`; no database migration or
+additional notification table was needed.
 
 ## API endpoints
 
@@ -124,6 +126,7 @@ All routes are mounted below `/api`. Request bodies are JSON.
 | `GET /api/impacts` | Lists findings with `affectedConsumers`. |
 | `POST /api/gate-check` | Evaluates a provider release. |
 | `POST /api/publish/check` | Alias for the publishing check. |
+| `POST /api/notifications/retry` | Retries all pending (`notified=false`) BREAKING findings. |
 
 `POST /api/gate-check` accepts `provider` and either `publishOrder` or
 `version` (also accepted as `targetVersion`). `publishOrder` is preferred
@@ -153,6 +156,9 @@ explanation and warnings. Provider-internal breaking findings can produce
 6. The gate checks stored findings for the selected provider and target
    version. Run analysis after importing/updating data before relying on its
    verdict.
+7. Analysis sends pending BREAKING findings to the configured webhook receiver
+   after impact recomputation. Successful sends are marked `notified`; failed
+   sends stay pending for a later analysis or explicit retry.
 
 ## Specification normalization and comparison
 
@@ -207,6 +213,29 @@ The gate blocks when a target release has at least one consumer-associated
 and applicable non-breaking warnings are returned separately. It does not
 publish a release or make changes to provider systems.
 
+## Webhook notifications
+
+`POST /api/analyze` reconciles generated engine findings against existing
+records using provider, version pair, severity, rule, path and message. A
+matching finding retains its database ID and `notified` state; stale findings
+are removed and new findings start with `notified=false`. After consumer
+impacts are refreshed, the API POSTs each pending BREAKING finding to
+`{WEBHOOK_BASE}/contract-guard`. `WEBHOOK_BASE` is already configured by
+Compose as `http://webhook-receiver:9000`; locally it defaults to
+`http://localhost:9900`.
+
+The JSON payload contains `findingId`, `provider`, `fromVersion`, `toVersion`,
+`severity`, `affectedApiPath`, `findingPath`, `explanation` and
+`affectedConsumers`. The operation path uses the engine's normalized parameter
+placeholder (`{param}`). A successful 2xx response sets `Finding.notified=true`.
+Transport errors, timeouts and non-2xx statuses are logged and reported in the
+analysis response; they do not delete the finding or fail the analysis.
+
+`POST /api/notifications/retry` retries every pending BREAKING finding.
+Repeated analyses also retry failed notifications, while already delivered
+findings are not sent again. An in-process guard skips concurrent sends of the
+same finding in one server process.
+
 ## Important decisions and limitations
 
 - Publish lineage is `(providerId, publishOrder)`. Duplicate version strings
@@ -219,6 +248,12 @@ publish a release or make changes to provider systems.
   selected by publish order.
 - The gate assumes analysis has been run. A valid but unanalyzed target has no
   stored engine findings to block it.
+- Notification delivery is retryable and sequentially duplicate-safe after the
+  `notified` update. The receiver has no idempotency key support, so a process
+  crash after the receiver accepts a POST but before SQLite records
+  `notified=true` can result in a duplicate on retry.
+- The in-flight notification guard is process-local; it does not coordinate
+  multiple API replicas.
 - The MVP comparison does not flag removed operations or schema type changes,
   and only compares JSON request/response schemas.
 - Impact rule matching is intentionally simple; it is not a full static

@@ -2,11 +2,10 @@
 
 ## Current stage
 
-M0–M3 are implemented. M3 has been verified against the starter-kit data and
-the publishing-check route. M4 notifications and M5 dashboard screens are
-pending. M6 documentation is in progress; the clean Compose/demo verification
-and other hardening remain outstanding. The app is a buildathon MVP, not a
-production release gate.
+M0–M4 are implemented. M3 has been verified against the starter-kit data and
+the publishing-check route. M5 dashboard screens are pending. M6 documentation
+is in progress; clean Compose/demo verification and other hardening remain
+outstanding. The app is a buildathon MVP, not a production release gate.
 
 ## Milestone status
 
@@ -61,8 +60,8 @@ production release gate.
   `app/server/src/routes/impact.ts`,
   `app/server/src/routes/publish.ts`,
   `app/server/src/m3.test.ts`.
-- **Evidence:** `npm run test:m3` passed against the actual kit. It reported
-  `firstAnalysisCreated: 20`, `secondAnalysisCreated: 20`,
+- **Evidence:** `npm run test:m3` passed against the actual kit. The latest run
+  reported `firstAnalysisCreated: 0`, `secondAnalysisCreated: 0`,
   `findingCount: 22` and `impactCount: 5`; assertions verified B1/mobile-app,
   B3/payments-svc, B4/B5/partner-portal, B6 without external attribution,
   unrelated notifications consumer exclusion and repeat-analysis behavior.
@@ -74,16 +73,25 @@ production release gate.
   selecting a publish order; duplicate version strings can conflate findings.
   The gate assumes analysis was run first. See [DESIGN.md](./DESIGN.md).
 
-### M4 — Notifications: pending
+### M4 — Notifications: completed
 
-- **Implemented:** none of the planned finding-delivery workflow.
-- **Important files:** `Finding.notified` exists in
-  `app/server/prisma/schema.prisma`; `app/server/src/routes/health.ts` checks
-  receiver reachability only.
-- **Evidence:** no notification route/worker or analysis-to-receiver POST is
-  wired into the current source.
-- **Remaining:** implement per-finding webhook delivery, update `notified`,
-  and cover receiver-down/retry behavior as specified in `PLAN.md`.
+- **Implemented:** analysis reconciles engine findings to preserve IDs and
+  delivery state, then sends pending BREAKING findings to the configured
+  webhook receiver. Successful deliveries set `Finding.notified`; receiver
+  failures remain pending. A retry route and analysis-triggered retries are
+  available.
+- **Important files:** `app/server/src/notifications/webhook.ts`,
+  `app/server/src/routes/notifications.ts`,
+  `app/server/src/routes/analyze.ts`, `app/server/src/index.ts`,
+  `app/server/src/m4.test.ts`.
+- **Evidence:** `npm run test:m4` passed against a local HTTP receiver,
+  verifying payload fields, BREAKING-only delivery, 2xx success, HTTP 503
+  during analysis without losing the finding, retry, and no duplicate send
+  after success. No schema migration was needed.
+- **Remaining/limitations:** receiver acceptance followed by a process crash
+  before `notified=true` is persisted can result in a retry duplicate because
+  the starter receiver does not support idempotency keys. In-flight
+  de-duplication is process-local.
 
 ### M5 — Dashboard: pending
 
@@ -99,16 +107,14 @@ production release gate.
 
 ### M6 — Hardening and demo: in progress
 
-- **Implemented:** existing M2 rule suite, M3 real-kit integration checks and
-  the root setup/architecture/progress documentation.
+- **Implemented:** M2/M3/M4 test suites and the root
+  setup/architecture/progress documentation.
 - **Important files:** `PLAN.md`, `app/server/src/engine/engine.test.ts`,
   `app/server/src/m3.test.ts`, root `README.md`.
-- **Evidence:** M2 tests passed 29/29; M3 integration checks passed. The root
-  `README.md`, `DESIGN.md` and `PROGRESS.md` have been created/updated in this
-  documentation task.
-- **Remaining:** broaden golden-path/API tests; cover the M4 workflow after
-  implementation; verify a clean Compose build and demo flow; add operational
-  guidance and resolve known gate limitations.
+- **Evidence:** M2 tests passed 29/29; M3 and M4 integration checks passed;
+  server type-check and build passed. Root project documentation is present.
+- **Remaining:** broaden golden-path/API tests; verify a clean Compose build
+  and demo flow; add operational guidance and resolve known gate limitations.
 
 ## Verified commands and outcomes
 
@@ -118,8 +124,9 @@ Run commands from the indicated package directory:
 | --- | --- | --- |
 | `app/server` | `npm run test` | Pass: all 29 M2 checks; 20 engine findings (11 `BREAKING`, 9 `INFO`). |
 | `app/server` | `npm run typecheck` | Pass in the current verification run. |
-| `app/server` | `npm run test:m3` | Pass in M3 verification: 22 total findings and 5 impact associations; repeat analysis remained idempotent. |
-| `app/server` | `npm run build` | Pass during M3 verification. |
+| `app/server` | `npm run test:m3` | Pass: 22 total findings and 5 impact associations; repeat analysis created 0 duplicates. |
+| `app/server` | `npm run test:m4` | Pass: payload, success, HTTP 503 failure, retry and duplicate prevention. |
+| `app/server` | `npm run build` | Pass in the current M4 verification run. |
 | `app/web` | `npm run typecheck` | Not run successfully here: frontend dependencies were absent and `tsc` was not found. |
 | `app/web` | `npm run build` | Not verified here for the same missing dependencies. |
 
@@ -129,7 +136,8 @@ to use; use a development database when running it.
 ## Known limitations
 
 - Planned `x-sunset`, deprecation and early-removal rules are missing.
-- No webhook notifications or retry loop exist yet.
+- Webhook delivery is implemented; exactly-once delivery across process crashes
+  is not guaranteed because the receiver has no idempotency support.
 - The frontend is a health page rather than the planned dashboard.
 - The gate should require a current analysis and should select findings by
   publish slot, not only a potentially duplicated version string.
@@ -142,8 +150,7 @@ to use; use a development database when running it.
 
 1. Resolve the gate's stale-analysis and duplicate-version selection behavior
    and add endpoint-level tests for success and error responses.
-2. Implement M4 webhook notification delivery and retry semantics.
-3. Build the planned M5 dashboard using the existing catalog, findings and
+2. Build the planned M5 dashboard using the existing catalog, findings and
    impact APIs.
-4. Complete M6 clean Compose/demo verification and document any remaining
+3. Complete M6 clean Compose/demo verification and document any remaining
    acceptance gaps.

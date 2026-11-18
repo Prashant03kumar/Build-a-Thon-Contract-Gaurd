@@ -7,6 +7,7 @@ import { router as importRouter } from "./routes/import";
 import { router as analyzeRouter } from "./routes/analyze";
 import { router as impactRouter } from "./routes/impact";
 import { router as publishRouter } from "./routes/publish";
+import { router as notificationsRouter } from "./routes/notifications";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const app = express();
@@ -21,6 +22,7 @@ app.use("/api", importRouter);
 app.use("/api", analyzeRouter);
 app.use("/api", impactRouter);
 app.use("/api", publishRouter);
+app.use("/api", notificationsRouter);
 app.use("/api", (_req, res) => res.status(404).json({ error: "not found" }));
 
 // --- static web UI ---
